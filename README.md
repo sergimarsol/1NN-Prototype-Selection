@@ -1,124 +1,170 @@
-**Prototype Selection Utility**
+# 1NN-Prototype-Selection
 
-This repository contains tools to select prototype subsets from a labeled training set for 1-NN classification on MNIST. The main script you asked for is `select_prototypes.py`, which selects M prototypes using any of the implemented methods. This README documents parameters, behaviors, methods, and where the other key files fit in.
+**Shrinking MNIST's 60,000-image training set to a small set of prototypes for 1-nearest-neighbor classification. With only 100 prototypes, coverage-oriented class-wise k-means reaches 79.6% accuracy, against 65.6% for random sampling.**
 
-**Usage**
-- Command-line examples:
+Solo project for UC San Diego **CSE 251A** (Programming Project 1). The full write-up is in [`SergiMarsol_Project1_CSE251A.pdf`](SergiMarsol_Project1_CSE251A.pdf).
 
-```bash
-# Default method (error-driven)
-python select_prototypes.py --M 1000
+---
 
-# Random stratified (10 runs used elsewhere for error bars)
-python select_prototypes.py --M 500 --method random
+## Overview
 
-# Equal k-means (Run 1)
-python select_prototypes.py --M 2000 --method equal-kmeans
+1-NN classification is simple and strong, but every prediction scans the whole training set, so cost and memory grow linearly with it. *Prototype selection* replaces the training set with a small subset of **M** representative examples. The aim is to keep as much accuracy as possible while cutting the stored set by 6× to 600×.
 
-# Iterative (Run 3)
-python select_prototypes.py --M 5000 --method iterative
+This repo implements and compares five strategies on MNIST, with 60k training and 10k test images represented as 784-dimensional pixel vectors. The budgets are M ∈ {100, 200, 500, 1000, 2000, 5000, 10000}.
 
-# Selective hybrid (Run 5)
-python select_prototypes.py --M 10000 --method selective-hybrid
+## What I built
 
-# Save prototypes to file
-python select_prototypes.py --M 1000 --method error-driven --output prototypes_1000.npz
+- **A prototype-selection library** (`proj1.py`): a binary MNIST loader, class-wise k-means with arbitrary per-class budgets that snaps each centroid to its nearest real training image, a stratified random baseline, per-class 1-NN evaluation, error-proportional budget reallocation with a minimum-per-class constraint, an iterative reallocation loop with a convergence check, nearest-enemy search, and two boundary-aware refinement schemes.
+- **A CLI selector** (`select_prototypes.py`): picks M prototypes with any method, reports the 1-NN test accuracy, and can export the prototypes as `.npz`. It is also importable as `PrototypeSelector`.
+- **An experiment harness** (`run_experiments.py`): runs all five methods for a given M. The random baseline is repeated over 10 seeds (mean ± std) and the k-means methods use a fixed seed. Writes overall and per-class accuracies to a TSV.
+- **Plots and analysis** (`plot_results.py`, `plot_per_class_results.py`, report): accuracy-vs-budget curves and per-class breakdowns, with the trade-offs between methods discussed in the report.
 
-# With normalization and custom seed
-python select_prototypes.py --M 2000 --method iterative --normalize --seed 123
+## Methods
+
+The design is iterative: each method was motivated by a failure mode of the previous one.
+
+```mermaid
+flowchart TD
+    A["Random stratified<br/>(baseline, M/10 per class)"] --> B
+    B["Run 1: Equal class-wise k-means<br/>coverage of each class manifold"] -->|"hard digits under-covered"| C
+    C["Run 2: Error-driven reallocation<br/>budget ∝ per-class 1-NN error, ≥30 per class"] -->|"allocation should adapt as error shifts"| D
+    D["Run 3: Iterative reallocation<br/>repeat until allocation converges (≤10 iters)"] -->|"remaining errors sit near class boundaries"| E
+    E["Run 4 (intermediate): replace 20% of prototypes<br/>with global boundary points (hurt accuracy)"] --> F
+    F["Run 5: Selective hybrid<br/>swap interior prototypes of the 3 hardest classes<br/>for label-consistent nearest-enemy points (budget-neutral)"]
 ```
 
-**Script parameters**
-- `--M` (int, required): Number of prototypes to select.
-- `--method` (str, default: `error-driven`): Selection method. Options:
-  - `random` : Stratified random sampling (equal per-class). Good baseline.
-  - `equal-kmeans` : Equal allocation class-wise k-means (Run 1). Runs k-means per-class to obtain prototypes.
-  - `error-driven` : Error-driven reallocation (Run 2). Default: initial equal allocation, evaluate per-class errors, reallocate budget and recompute k-means.
-  - `iterative` : Iterative error-driven reallocation (Run 3). Repeats reallocation + k-means until convergence or max iterations.
-  - `selective-hybrid` : Selective hybrid refinement (Run 5). Focuses extra budget on the hardest classes and augments boundary points.
-- `--archive` (str, default: `archive`): Path to MNIST archive directory used by the demo loader. Can be any dataset loader path if adapting the code.
-- `--seed` (int, default: `42`): Random seed for deterministic methods and reproducibility.
-- `--output` (str, optional): Path to save selected prototypes in NumPy `.npz` format. When provided, file contains `X_proto` and `y_proto` arrays.
-- `--normalize` (flag): If set, applies `StandardScaler` normalization after scaling pixels to [0,1].
+| Method | `--method` | Idea |
+|---|---|---|
+| Random stratified | `random` | Equal random draw per class |
+| Run 1: Equal k-means | `equal-kmeans` | k-means inside each class with M/10 clusters; each centroid is replaced by the nearest real image |
+| Run 2: Error-driven | `error-driven` (default) | Run 1, measure per-class error, reallocate the budget in proportion to error (min 30 per class), re-cluster |
+| Run 3: Iterative | `iterative` | Repeat Run 2 until the largest allocation change is ≤ 0.001 or 10 iterations |
+| Run 5: Selective hybrid | `selective-hybrid` | Run 3, then for the 3 highest-error classes replace the most "interior" prototypes with boundary points (smallest nearest-enemy distance, with a local label-consistency filter) |
 
-**What the script prints**
-When you run `select_prototypes.py` it prints the following (in order):
-- `Loading data from ...` — path loaded.
-- `Training data` and `Test data` shapes after loading (and normalization if used).
-- If `--normalize` is used: `Applying StandardScaler normalization...`.
-- `Selecting M prototypes using '<method>' method...` — which method is running.
-- `Selected N prototypes` — number of prototypes selected (should equal `M`).
-- `Class distribution: [...]` — counts per class in the selected prototypes.
-- `1-NN Test Accuracy: x.xxxx (xx.xx%)` — the accuracy of a 1-NN classifier trained on the selected prototypes and evaluated on the test set.
-- If `--output` was given: message `Prototypes saved to <path>` and load hint.
+Run 4, the naive global boundary replacement, exists as `boundary_aware_refinement()` in `proj1.py`. The report describes it as an intermediate experiment that reduced accuracy. It is not exposed in the CLI.
 
-**How to save and load results**
-- Save: use the `--output` flag (e.g. `--output prototypes_1000.npz`).
-- Load in Python:
+## Results
+
+1-NN test accuracy on the 10,000 MNIST test images. Source: [`results/results_M*.tsv`](results/), which matches Table 1 of the report. Random stratified is the mean ± std over 10 seeds; the other methods are single runs with seed 42.
+
+| Method | M=100 | M=200 | M=500 | M=1000 | M=2000 | M=5000 | M=10000 |
+|---|---|---|---|---|---|---|---|
+| Random stratified | 0.6555 ± 0.0202 | 0.7335 ± 0.0120 | 0.7980 ± 0.0062 | 0.8388 ± 0.0035 | 0.8650 ± 0.0035 | 0.8972 ± 0.0027 | 0.9146 ± 0.0026 |
+| Run 1: Equal k-means | **0.7962** | **0.8206** | 0.8553 | 0.8749 | 0.8972 | 0.9091 | 0.9187 |
+| Run 2: Error-driven | **0.7962** | **0.8206** | 0.8555 | 0.8849 | **0.9030** | 0.9141 | 0.9242 |
+| Run 3: Iterative | 0.7918 | 0.8191 | **0.8619** | **0.8855** | 0.8995 | **0.9158** | **0.9247** |
+| Run 5: Selective hybrid | 0.7915 | 0.8177 | 0.8591 | 0.8833 | 0.8977 | 0.9143 | 0.9226 |
+
+<p align="center"><img src="results/results_plot.png" alt="1-NN accuracy vs number of prototypes for all methods" width="85%"></p>
+
+<p align="center"><img src="results/per_class_results_plot.png" alt="Per-class accuracy at M=100 and M=10000" width="85%"></p>
+
+**Takeaways**
+
+- **Coverage matters most at small budgets.** At M=100, class-wise k-means beats random sampling by 14 points (79.6% vs 65.6%). At M=10,000 the gap between random sampling and the best method shrinks to about 1 point (91.5% vs 92.5%).
+- **Error-driven allocation helps once the budget is large enough.** At M=100 and M=200, the 30-per-class minimum (300 in total) exceeds M. The code then falls back to equal allocation, so Run 2 is identical to Run 1. From M=1000 upward, Run 2 adds 0.5 to 1 point over Run 1.
+- **Iterating gives only marginal gains, at roughly 10× the runtime of single-pass reallocation** (per the report). Run 3 has the best accuracy at 4 of the 7 budgets, but Run 2 is the better accuracy/compute trade-off.
+- **Boundary augmentation did not pay off on MNIST.** Run 5 is slightly below Run 3 at every budget, so centroid coverage already captures most of the structure that 1-NN can use.
+- **Per-class:** digit 1 is easy for every method. Digits 2, 4, 5 and 7 gain the most from structured selection at low M: about 19 to 21 points over random sampling at M=100 (Run 1).
+
+**Caveat on evaluation.** In this course setup (Algorithms 2 to 4 in the report), the per-class errors that drive reallocation in Runs 2, 3 and 5 are computed on the **MNIST test set**. Their accuracies are therefore optimistically biased compared with Run 1 and the random baseline. A clean protocol would estimate per-class errors on a validation split carved from the 60k training images. That change is small (pass a validation split as `X_test`/`y_test` to the selection functions and evaluate separately), but it has not been run here.
+
+## Getting started
+
+### 1. Install
+
+```bash
+git clone https://github.com/sergimarsol/1NN-Prototype-Selection.git
+cd 1NN-Prototype-Selection
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. Get MNIST
+
+Place the four uncompressed IDX files in an `archive/` folder (git-ignored) with these exact names, which `proj1.load_mnist_binary` expects:
+
+```
+archive/
+├── train-images.idx3-ubyte
+├── train-labels.idx1-ubyte
+├── t10k-images.idx3-ubyte
+└── t10k-labels.idx1-ubyte
+```
+
+Use `--archive /path/to/folder` to point to a different location.
+
+### 3. Select prototypes
+
+```bash
+python select_prototypes.py --M 1000                               # error-driven (default)
+python select_prototypes.py --M 500 --method random
+python select_prototypes.py --M 2000 --method equal-kmeans
+python select_prototypes.py --M 5000 --method iterative --normalize
+python select_prototypes.py --M 10000 --method selective-hybrid --normalize
+python select_prototypes.py --M 1000 --method error-driven --output prototypes_1000.npz
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--M` | *required* | Number of prototypes |
+| `--method` | `error-driven` | `random`, `equal-kmeans`, `error-driven`, `iterative`, `selective-hybrid` |
+| `--archive` | `archive` | Folder with the MNIST IDX files |
+| `--seed` | `42` | Random seed (k-means and random sampling) |
+| `--output` | none | Save `X_proto`, `y_proto` to a `.npz` file |
+| `--normalize` | off | Apply `StandardScaler` after scaling pixels to [0, 1] |
+
+The script prints the data shapes, the number of selected prototypes, the per-class prototype counts, and `1-NN Test Accuracy: …`. Pixels are always scaled to [0, 1]. `run_experiments.py` always applies `StandardScaler`, so pass `--normalize` to match the reported setup.
+
+Load saved prototypes:
 
 ```python
 import numpy as np
-data = np.load('prototypes_1000.npz')
-X_proto = data['X_proto']
-y_proto = data['y_proto']
+data = np.load("prototypes_1000.npz")
+X_proto, y_proto = data["X_proto"], data["y_proto"]
 ```
 
-**Short descriptions of each method**
-- `random` (Stratified Random): Draws equal numbers from each class at random.
-- `equal-kmeans` (Run 1): For each class, run k-means with the allocated number of prototypes and pick cluster centers as prototypes.
-- `error-driven` (Run 2, DEFAULT): Start with equal allocation, evaluate per-class 1-NN errors on the test set, reallocate prototypes to classes with higher error (subject to a minimum per-class constraint), then recompute class-wise k-means.
-- `iterative` (Run 3): Repeat the error-driven reallocation and k-means steps until allocations converge or a maximum number of iterations is reached.
-- `selective-hybrid` (Run 5): Use iterative allocation as a base, then augment prototypes for the hardest classes with boundary points (nearest enemy samples) to improve class separation.
-
-**Importing as a module**
-You can import the main selector and use it from Python code:
+Use it as a module with data already in memory:
 
 ```python
 from select_prototypes import PrototypeSelector
-
 selector = PrototypeSelector(X_train, y_train, X_test, y_test, random_state=42)
-X_proto, y_proto = selector.select_prototypes(M=1000, method='error-driven')
+X_proto, y_proto = selector.select_prototypes(M=1000, method="error-driven")
 ```
 
-This is helpful when you already have your datasets in memory and just want to run selection programmatically.
+### 4. Reproduce the experiments
 
-**What `run_experiments.py` does**
-- Purpose: orchestrates full experiments for a given `M` and writes a TSV with per-method overall and per-class accuracies.
-- Key parameters:
-  - `--M`: total number of prototypes (same meaning as `select_prototypes.py`).
-  - `--archive`: path to MNIST archive (default `archive`).
-  - `--seed`: random seed for deterministic runs (default `42`).
-- Behavior:
-  - Runs `Random Stratified` multiple times (10 by default) to estimate mean ± std.
-  - Runs deterministic k-means based methods (Runs 1, 2, 3, and 5) once each with a fixed seed (seed=42) so they produce deterministic results.
-  - Collects per-class accuracies and writes them to `results_M{M}.tsv`.
-  - Prints a short summary to stdout.
-- Output: `results_M{M}.tsv` (tab-separated file containing overall accuracies and per-class accuracies; randomized methods include ± std formatting).
+```bash
+for M in 100 200 500 1000 2000 5000 10000; do
+  python run_experiments.py --M $M        # writes results_M${M}.tsv to the current directory
+done
+python plot_results.py                    # -> results_plot.png
+python plot_per_class_results.py          # -> per_class_results_plot.png
+```
 
-**What `proj1.py` implements**
-`proj1.py` is a pure algorithm library (not meant to be run directly). It provides the building blocks used by both `select_prototypes.py` and `run_experiments.py`. Key functions include:
+`run_experiments.py` takes `--M` (default 1000), `--archive` (default `archive`) and `--seed` (default 42). The selective-hybrid runs at large M are the slowest because of the nearest-enemy search over all 60k training points. The two plotting scripts contain the accuracy values from `results/` hard-coded, so update their arrays if you re-run the experiments.
 
-- `load_mnist_binary(archive_path)` — Loads MNIST training and test data from binary files.
-- `classwise_kmeans_prototypes_with_allocation(X, y, allocation_dict, random_state, n_init)` — Runs per-class k-means with specified budget allocation per class.
-- `stratified_random_prototypes(X, y, M, random_state)` — Stratified random sampling baseline.
-- `evaluate_1nn_per_class(X_proto, y_proto, X_test, y_test)` — Evaluates 1-NN and returns overall + per-class accuracies.
-- `reallocate_prototypes_by_error(error_rates, M, min_prototypes_per_class)` — Reallocates prototype budget based on per-class error rates.
-- `iterative_error_driven_reallocation(...)` — Runs error-driven reallocation in a loop until allocations converge.
-- `selective_hybrid_refinement(...)` — Augments hard classes with boundary points (nearest enemy samples).
-- `find_nearest_enemies(X_train, y_train)` — Finds nearest different-class neighbor for each training sample.
+## Tech stack
 
-**Determinism notes**
-- K-means and other stochastic components use the `random_state` parameter when called from `select_prototypes.py` or `run_experiments.py` to ensure reproducible results (default `42`).
-- Randomized baseline (`random`) will be seeded by `--seed` and will return the same sample when using the same seed.
-- `run_experiments.py` runs the randomized baseline multiple times (10) to compute reliable error bars.
+Python · NumPy · scikit-learn (KMeans, KNeighborsClassifier, NearestNeighbors, StandardScaler) · Matplotlib
 
-**Where to go next**
-- Use `select_prototypes.py` for quick selection tasks and prototyping.
-- Use `run_experiments.py` to run the full experimental regime and create TSV output files for reporting.
-- View `plot_results.py` and `plot_per_class_results.py` to generate visualizations of accuracy across methods.
+## Repository structure
 
-**Visualization Files**
+```
+proj1.py                    # algorithm library: loader, k-means selection, reallocation, boundary refinement
+select_prototypes.py        # CLI + PrototypeSelector class
+run_experiments.py          # full experiment harness -> results_M{M}.tsv
+plot_results.py             # accuracy vs M plot
+plot_per_class_results.py   # per-class accuracy plot (M=100 vs M=10000)
+results/                    # TSV results for all 7 budgets + figures
+SergiMarsol_Project1_CSE251A.pdf  # project report
+requirements.txt
+```
 
-- `plot_results.py` — Generates a plot of overall 1-NN accuracy vs. prototype budget (M) across all 5 methods, with error bars for the random baseline. Shows how each method's accuracy improves as M increases from 100 to 10,000.
+## Acknowledgements
 
-- `plot_per_class_results.py` — Generates a per-class accuracy plot for M=100 and M=10,000 across all methods and all 10 MNIST digit classes. Useful for identifying which classes are easy vs. hard and which methods perform best per-class.
+Course project for CSE 251A at UC San Diego. The methods build on the prototype-selection literature cited in the report: García et al., 2012 (*IEEE TPAMI*); Vascon et al., 2013; Plasencia-Calaña et al., 2017. As stated in the report's AI usage statement, AI tools helped with code formatting and comments, the README, and writing polish.
+
+## License
+
+[MIT](LICENSE) © 2026 Sergi Marsol

@@ -27,3 +27,6 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Generated prototype files
+*.npz
