@@ -27,7 +27,7 @@ import numpy as np
 import argparse
 from sklearn.preprocessing import StandardScaler
 
-from proj1 import (
+from prototype_selection import (
     load_mnist_binary,
     evaluate_1nn_per_class,
     classwise_kmeans_prototypes_with_allocation,

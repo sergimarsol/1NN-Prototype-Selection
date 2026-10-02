@@ -22,7 +22,7 @@ from sklearn.cluster import KMeans
 from sklearn.neighbors import KNeighborsClassifier, NearestNeighbors
 from sklearn.metrics import accuracy_score
 
-from proj1 import (
+from prototype_selection import (
     load_mnist_binary,
     evaluate_1nn_per_class,
     classwise_kmeans_prototypes_with_allocation,

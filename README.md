@@ -2,7 +2,7 @@
 
 **Shrinking MNIST's 60,000-image training set to a small set of prototypes for 1-nearest-neighbor classification. With only 100 prototypes, coverage-oriented class-wise k-means reaches 79.6% accuracy, against 65.6% for random sampling.**
 
-Solo project for UC San Diego **CSE 251A** (Programming Project 1). The full write-up is in [`SergiMarsol_Project1_CSE251A.pdf`](SergiMarsol_Project1_CSE251A.pdf).
+The full technical write-up (methods, ablations, per-class analysis) is in [`report.pdf`](report.pdf).
 
 ---
 
@@ -14,7 +14,7 @@ This repo implements and compares five strategies on MNIST, with 60k training an
 
 ## What I built
 
-- **A prototype-selection library** (`proj1.py`): a binary MNIST loader, class-wise k-means with arbitrary per-class budgets that snaps each centroid to its nearest real training image, a stratified random baseline, per-class 1-NN evaluation, error-proportional budget reallocation with a minimum-per-class constraint, an iterative reallocation loop with a convergence check, nearest-enemy search, and two boundary-aware refinement schemes.
+- **A prototype-selection library** (`prototype_selection.py`): a binary MNIST loader, class-wise k-means with arbitrary per-class budgets that snaps each centroid to its nearest real training image, a stratified random baseline, per-class 1-NN evaluation, error-proportional budget reallocation with a minimum-per-class constraint, an iterative reallocation loop with a convergence check, nearest-enemy search, and two boundary-aware refinement schemes.
 - **A CLI selector** (`select_prototypes.py`): picks M prototypes with any method, reports the 1-NN test accuracy, and can export the prototypes as `.npz`. It is also importable as `PrototypeSelector`.
 - **An experiment harness** (`run_experiments.py`): runs all five methods for a given M. The random baseline is repeated over 10 seeds (mean ± std) and the k-means methods use a fixed seed. Writes overall and per-class accuracies to a TSV.
 - **Plots and analysis** (`plot_results.py`, `plot_per_class_results.py`, report): accuracy-vs-budget curves and per-class breakdowns, with the trade-offs between methods discussed in the report.
@@ -41,7 +41,7 @@ flowchart TD
 | Run 3: Iterative | `iterative` | Repeat Run 2 until the largest allocation change is ≤ 0.001 or 10 iterations |
 | Run 5: Selective hybrid | `selective-hybrid` | Run 3, then for the 3 highest-error classes replace the most "interior" prototypes with boundary points (smallest nearest-enemy distance, with a local label-consistency filter) |
 
-Run 4, the naive global boundary replacement, exists as `boundary_aware_refinement()` in `proj1.py`. The report describes it as an intermediate experiment that reduced accuracy. It is not exposed in the CLI.
+Run 4, the naive global boundary replacement, exists as `boundary_aware_refinement()` in `prototype_selection.py`. The report describes it as an intermediate experiment that reduced accuracy. It is not exposed in the CLI.
 
 ## Results
 
@@ -82,7 +82,7 @@ pip install -r requirements.txt
 
 ### 2. Get MNIST
 
-Place the four uncompressed IDX files in an `archive/` folder (git-ignored) with these exact names, which `proj1.load_mnist_binary` expects:
+Place the four uncompressed IDX files in an `archive/` folder (git-ignored) with these exact names, which `prototype_selection.load_mnist_binary` expects:
 
 ```
 archive/
@@ -151,19 +151,19 @@ Python · NumPy · scikit-learn (KMeans, KNeighborsClassifier, NearestNeighbors,
 ## Repository structure
 
 ```
-proj1.py                    # algorithm library: loader, k-means selection, reallocation, boundary refinement
+prototype_selection.py      # algorithm library: loader, k-means selection, reallocation, boundary refinement
 select_prototypes.py        # CLI + PrototypeSelector class
 run_experiments.py          # full experiment harness -> results_M{M}.tsv
 plot_results.py             # accuracy vs M plot
 plot_per_class_results.py   # per-class accuracy plot (M=100 vs M=10000)
 results/                    # TSV results for all 7 budgets + figures
-SergiMarsol_Project1_CSE251A.pdf  # project report
+report.pdf                  # technical report
 requirements.txt
 ```
 
 ## Acknowledgements
 
-Course project for CSE 251A at UC San Diego. The methods build on the prototype-selection literature cited in the report: García et al., 2012 (*IEEE TPAMI*); Vascon et al., 2013; Plasencia-Calaña et al., 2017. As stated in the report's AI usage statement, AI tools helped with code formatting and comments, the README, and writing polish.
+Developed at UC San Diego (CSE 251A, Winter 2026). The methods build on the prototype-selection literature cited in the report: García et al., 2012 (*IEEE TPAMI*); Vascon et al., 2013; Plasencia-Calaña et al., 2017. As stated in the report's AI usage statement, AI tools helped with code formatting and comments, the README, and writing polish.
 
 ## License
 
